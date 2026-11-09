@@ -1,0 +1,6 @@
+supabase>=2.10
+anthropic>=0.40
+feedparser>=6.0
+beautifulsoup4>=4.12
+requests>=2.31
+Pillow>=10.1

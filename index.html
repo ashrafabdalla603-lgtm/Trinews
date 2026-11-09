@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0A2A1F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:wght@600;700&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+<title>Tri News review queue</title>
+<style>
+:root{--paper:#F3F6F4;--ink:#0A2A1F;--mut:#5F6F78;--line:#D5DCD7;--bd:#7E8E87;--leaf:#14804E;--sig:#FF5A36;--bad:#A12F18}
+*{box-sizing:border-box}
+button,input,textarea{font-family:inherit}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 'Plus Jakarta Sans',system-ui,sans-serif}
+#app{max-width:560px;margin:0 auto;padding:0 16px calc(48px + env(safe-area-inset-bottom))}
+h1{margin:0;font:700 24px/1.2 Newsreader,Georgia,serif}
+.top{display:flex;align-items:center;gap:10px;padding:calc(18px + env(safe-area-inset-top)) 0 8px}
+.top h1{flex:1}
+.mut{color:var(--mut);font-size:14px;margin:0 0 12px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:0 0 14px}
+.ch{min-height:44px;padding:0 16px;border-radius:22px;border:1px solid var(--bd);background:#fff;color:var(--ink);font-weight:600;font-size:14px;white-space:nowrap}
+.ch.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.c{display:flex;flex-direction:column;gap:8px;padding:16px;margin:0 0 12px;background:#fff;border:1px solid var(--line);border-radius:16px;color:inherit;text-decoration:none}
+.r{display:flex;align-items:center;gap:8px}
+.p{min-width:40px;height:28px;padding:0 10px;border-radius:14px;background:#E4EAE6;font-weight:800;font-size:14px;display:inline-flex;align-items:center;justify-content:center}
+.u{background:var(--sig)}
+.tp{flex:1;font-weight:600;font-size:13px;color:var(--mut)}
+.cl{font-size:12px;font-weight:600;padding:3px 10px;border-radius:6px}
+.cl-confirmed{background:#E3F4EA;color:#0F6B42;border:1.5px solid #0F6B42}
+.cl-unverified{background:#FFF4D6;color:#8A5700;border:1.5px solid #8A5700}
+.cl-speculation{background:#EFE8FF;color:#5B2FB8;border:1.5px dashed #5B2FB8}
+.h{margin:0;font:700 19px/1.25 Newsreader,Georgia,serif}
+.x{margin:0;font-size:14px;color:#4A5A63}
+.ft{display:flex;justify-content:space-between;font-size:12px;color:var(--mut)}
+.lb{display:flex;flex-direction:column;gap:6px;margin-top:16px;font-size:13px;font-weight:600;color:var(--mut)}
+.in{width:100%;min-height:48px;padding:12px;border:1px solid var(--bd);border-radius:10px;background:#fff;color:var(--ink);font-size:15px;line-height:1.4}
+.hl{font:700 17px Newsreader,Georgia,serif}
+.sg{display:flex;border:1px solid var(--bd);border-radius:10px;overflow:hidden;background:#fff}
+.sg button{flex:1;min-height:44px;border:0;background:none;color:var(--ink);font-weight:600;font-size:13px}
+.sg .on{background:var(--ink);color:#fff}
+.ck{display:flex;align-items:center;gap:12px;min-height:44px;color:var(--ink);font-size:15px}
+.ck input{width:22px;height:22px;margin:0;accent-color:var(--leaf)}
+.bt{min-height:52px;padding:0 16px;border-radius:12px;border:1.5px solid var(--bd);background:#fff;color:var(--ink);font-weight:700;font-size:15px}
+.go{background:var(--leaf);border-color:var(--leaf);color:#fff}
+.no{color:var(--bad);border-color:var(--bad)}
+.acts{display:flex;gap:10px;margin-top:20px}
+.acts .bt{flex:1}
+.acts .go{flex:2}
+.pv{display:block;width:100%;border-radius:16px;margin:4px 0 6px}
+.src{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--mut)}
+.src a{min-height:44px;display:flex;align-items:center;color:#0F6B42;font-weight:600}
+.orig{white-space:pre-wrap;font-size:14px;color:var(--mut)}
+.err{color:var(--bad);font-size:14px}
+.ghost{min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--bd);background:none;color:var(--mut);font-weight:600;font-size:13px}
+.back{width:44px;height:44px;margin-left:-12px;border:0;background:none;display:flex;align-items:center;justify-content:center}
+.login{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding-top:calc(56px + env(safe-area-inset-top))}
+.login .bt{width:100%;margin-top:20px}
+.small{font-size:13px;margin:20px 0 0}
+a{color:var(--leaf)}
+:focus-visible{outline:2px solid var(--leaf);outline-offset:2px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect width="512" height="512" fill="#fff"/><circle cx="386" cy="140" r="80" fill="#000"/></mask><symbol id="mk" viewBox="0 0 512 512"><path mask="url(#cut)" style="fill:var(--b,#14804E)" d="M144 96H368A80 80 0 0 1 448 176V296A80 80 0 0 1 368 376H216L92 448L144 376A80 80 0 0 1 64 296V176A80 80 0 0 1 144 96Z"/><g style="fill:var(--l,#fff)"><rect x="120" y="168" width="168" height="32" rx="16"/><rect x="120" y="232" width="272" height="32" rx="16"/><rect x="120" y="296" width="208" height="32" rx="16"/></g><circle cx="386" cy="140" r="58" fill="#FF5A36"/></symbol></defs></svg>
+<main id="app"></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

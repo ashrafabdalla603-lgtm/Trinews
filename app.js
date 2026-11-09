@@ -1,5 +1,5 @@
-const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR-ANON-KEY";   // the anon key only. Never the service key.
+const SUPABASE_URL = "https://ujcuaglekgpqpzaxcmgm.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqY3VhZ2xla2dwcXB6YXhjbWdtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQxOTQ2ODcsImV4cCI6MjEwOTc3MDY4N30.7BZC1mYRAd1BrCP11yKCoUgzqO5yaUi_D4i";   // the anon key only. Never the service key.
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const $ = s => document.querySelector(s);

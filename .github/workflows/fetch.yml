@@ -1,22 +1,29 @@
 name: fetch
+
 on:
   schedule:
-    - cron: "7 * * * *"      # hourly. Tighten only on a public repo (see README)
+    - cron: "7 * * * *"   # hourly. Tighten only on a public repo (see README)
   workflow_dispatch:
+
 concurrency: fetch
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+
       - run: pip install -r requirements.txt
+
       - run: fc-list | grep -qi liberation || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-liberation)
-      -- run: python run_fetch.py
+
+      - run: python run_fetch.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

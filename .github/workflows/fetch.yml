@@ -16,7 +16,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: fc-list | grep -qi liberation || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-liberation)
-      - run: python worker/run_fetch.py
+      -- run: python run_fetch.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

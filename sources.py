@@ -1,3 +1,5 @@
+import os
+import re
 from urllib.parse import urljoin
 import datetime as dt
 import feedparser
@@ -6,26 +8,24 @@ from bs4 import BeautifulSoup
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; NewsdeskBot/1.0)"}
 
+def _gn(q):
+    return f"https://news.google.com/rss/search?q={q}&hl=en-KE&gl=KE&ceid=KE:en"
+
+
 # (name, url, type, category, trust 1-5)
-# 'watch' = official pages with no RSS: we flag NEW links on the page. Point each at the
-# site's news/announcements page when you can (less noise).
-# The RSS URLs are best guesses. Open each in a browser, then fix or disable it in the
-# `sources` table. A dead feed only logs an error; it never stops the run.
+# 'rss' = a news feed. 'watch' = an official page with no feed (flags NEW links). 'tips' = messages you send
+# to your Telegram bot. Instagram and Facebook pages cannot be read automatically (it breaks their rules and
+# gets accounts banned), so use tips for those. Feed addresses can go dead: check the sources table.
 SEED = [
-    ("KNEC", "https://www.knec.ac.ke/", "watch", "official", 5),
-    ("HELB", "https://www.helb.co.ke/", "watch", "official", 5),
-    ("KUCCPS", "https://www.kuccps.net/", "watch", "official", 5),
-    ("KRA", "https://www.kra.go.ke/", "watch", "official", 5),
-    ("eCitizen", "https://www.ecitizen.go.ke/", "watch", "official", 5),
-    ("TSC", "https://www.tsc.go.ke/", "watch", "official", 5),
-    ("NTSA", "https://ntsa.go.ke/", "watch", "official", 5),
-    ("Capital FM", "https://www.capitalfm.co.ke/news/feed/", "rss", "news", 3),
+    ("Your tips (Telegram)", "telegram://tips", "tips", "tips", 4),
+    ("Tuko", "https://www.tuko.co.ke/rss/all.rss", "rss", "gossip", 2),
     ("Kenyans.co.ke", "https://www.kenyans.co.ke/feeds/news", "rss", "news", 3),
-    ("The Star", "https://www.the-star.co.ke/rss", "rss", "news", 3),
-    ("Tuko", "https://www.tuko.co.ke/rss/all.rss", "rss", "celebrity", 2),
-    ("Pulse Kenya", "https://www.pulselive.co.ke/rss", "rss", "celebrity", 2),
-    ("Mpasho", "https://mpasho.co.ke/feed/", "rss", "celebrity", 2),
     ("Capital FM Lifestyle", "https://www.capitalfm.co.ke/lifestyle/feed/", "rss", "entertainment", 3),
+    ("News: gossip pages", _gn("%22Nairobi+Gossip+Club%22+OR+%22Kenya+Gossip+Club%22+OR+%22Buzz+Room%22+OR+Mpashogram+OR+%22Kenya+Times+News%22+OR+%22Migori+Gossip+Club%22+when:3d"), "rss", "gossip", 2),
+    ("News: Kenya celebrity gossip", _gn("Kenya+celebrity+OR+gossip+OR+%22baby+mama%22+OR+wedding+OR+breakup+when:1d"), "rss", "gossip", 2),
+    ("News: Kenya viral and trending", _gn("Kenya+viral+OR+trending+OR+%22went+viral%22+OR+backlash+when:1d"), "rss", "viral", 2),
+    ("News: music and comedy", _gn("Kenyan+musician+OR+gengetone+OR+%22gospel+artiste%22+OR+comedian+OR+influencer+when:2d"), "rss", "entertainment", 2),
+    ("News: watchlist", _gn("Bahati+OR+%22Oga+Obinna%22+OR+Lodwar+when:2d"), "rss", "watchlist", 2),
 ]
 
 
@@ -86,5 +86,37 @@ def fetch_watch(s, sb):
             for u, t in list(new.items())[:5]]
 
 
+def fetch_tips(s, sb):
+    """Messages you send to your Tri News Alerts bot become story tips. This is the safe way to use gossip
+    pages we cannot read ourselves: paste the post text, start with the page name."""
+    tok, chat = os.getenv("TELEGRAM_BOT_TOKEN"), str(os.getenv("TELEGRAM_CHAT_ID") or "")
+    if not (tok and chat):
+        return []
+    offset = (s.get("state") or {}).get("offset", 0)
+    r = requests.get(f"https://api.telegram.org/bot{tok}/getUpdates",
+                     params={"offset": offset, "timeout": 0}, timeout=20)
+    r.raise_for_status()
+    out, last = [], offset - 1
+    for u in r.json().get("result", []):
+        last = max(last, u["update_id"])
+        m = u.get("message") or {}
+        text = (m.get("text") or m.get("caption") or "").strip()
+        if str((m.get("chat") or {}).get("id")) != chat or text.startswith("/") or len(text) < 25:
+            continue                          # only you, only real text
+        link = re.search(r"https?://\S+", text)
+        out.append({"title": text.split("\n")[0][:140],
+                    "url": link.group(0) if link else f"tip://{u['update_id']}",
+                    "text": text,
+                    "published": dt.datetime.fromtimestamp(m.get("date", 0), dt.timezone.utc),
+                    "force": True})
+    if last >= offset:
+        sb.table("sources").update({"state": {"offset": last + 1}}).eq("id", s["id"]).execute()
+    return out
+
+
 def fetch_source(s, sb):
-    return fetch_watch(s, sb) if s["type"] == "watch" else fetch_rss(s)
+    if s["type"] == "watch":
+        return fetch_watch(s, sb)
+    if s["type"] == "tips":
+        return fetch_tips(s, sb)
+    return fetch_rss(s)

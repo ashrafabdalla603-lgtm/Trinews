@@ -45,7 +45,7 @@ def main():
     urls = list({c["url"] for c in cands})
     known = set()
     for i in range(0, len(urls), 100):
-                rows = sb.rpc("known_urls", {"url_list": urls[i:i + 100]}).execute().data
+        rows = sb.rpc("known_urls", {"url_list": urls[i:i + 100]}).execute().data
         known |= {r["source_url"] for r in rows}
     since = (now - dt.timedelta(days=3)).isoformat()
     recent = [r["original_title"] or "" for r in

@@ -2,7 +2,7 @@ name: fetch
 
 on:
   schedule:
-    - cron: "7 * * * *"   # hourly. Tighten only on a public repo (see README)
+    - cron: "30 * * * *"   # hourly. Tighten only on a public repo (see README)
   workflow_dispatch:
 
 concurrency: fetch

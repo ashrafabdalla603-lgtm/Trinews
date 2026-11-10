@@ -55,7 +55,7 @@ _last, _dead = [0.0], set()
 
 def _pace():
     """Free tiers allow only a few requests a minute, so space the calls out."""
-    gap = float(_e("AI_DELAY", "0" if PROVIDERS[0] == "anthropic" else "7"))
+    gap = float(_e("AI_DELAY", "0" if PROVIDERS[0] == "openrouter" else "20"))
     wait = _last[0] + gap - time.time()
     if wait > 0:
         time.sleep(wait)

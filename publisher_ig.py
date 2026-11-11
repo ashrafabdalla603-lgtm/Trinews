@@ -30,7 +30,10 @@ def _wait(container_id, tries=36):
 def publish(kind, caption, image_urls, video_url=None):
     """kind: feed | carousel | reel | story. Returns the Instagram media id."""
     if kind == "story":
-        c = _post(f"{IG}/media", image_url=image_urls[0], media_type="STORIES")
+        if video_url:
+            c = _post(f"{IG}/media", video_url=video_url, media_type="STORIES")
+        else:
+            c = _post(f"{IG}/media", image_url=image_urls[0], media_type="STORIES")
     elif kind == "reel":
         c = _post(f"{IG}/media", video_url=video_url, media_type="REELS", caption=caption, share_to_feed="true")
     elif kind == "carousel":

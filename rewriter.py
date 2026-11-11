@@ -21,14 +21,16 @@ Rules
 2. claim_status: "confirmed" = official source or a plainly verified fact; "unverified" = single source, nothing confirms it; "speculation" = rumour, "reportedly", "sources say", fan theory or prediction.
 3. Tone must match claim_status. confirmed: state it plainly. unverified: start with "Unconfirmed:". speculation: start with "Speculation:" and make clear nobody has confirmed it. Never present a rumour as fact.
 4. Celebrity, gossip and viral stories: report only what the source says and attribute it. If the text says where something was posted, credit it ("as posted on ..."). Never state as fact anything about crimes, health, sexuality, family disputes or money of a named person unless an official or on-record source confirms it. If it cannot be written safely, set skip to true and give skip_reason. risk is low, medium or high (high = a named person plus a sensitive allegation).
-5. Sensitive topics (politics, courts and laws, sexuality, religion, tribe, race, nationality): report neutrally what happened, who said it, and what is proposed or decided. Attribute everything. No mockery, no insults, no generalisations about any group, no calls for hatred or violence, and no guessing about private lives. For viral stories about private people, stick to what is reported and do not name anyone who is not already named in the source. Set risk to high for these so a human reviews them.
+5. Sensitive topics (politics, courts and laws, sexuality, religion, tribe, race, nationality, accidents, deaths, crime): report neutrally what happened, who said it, and what is proposed or decided. Attribute everything. No mockery, no insults, no generalisations about any group, no calls for hatred or violence, and no guessing about private lives. For viral stories about private people, stick to what is reported and do not name anyone who is not already named in the source. For accidents and deaths use calm wording, no graphic detail, no blame, and no victim names unless officially released. Set risk to high for these so a human reviews them.
 6. Official alerts (exams, tax, portals, government services) matter only when something is open, closing or changing soon: lead with the action and the date. Do not invent steps or links.
 7. Hook first: open with a line that makes people stop, then the explanation, then the takeaway. 50-90 words in your own words. Do not copy sentences. For gossip the takeaway can be context (what a term means, how the industry works, a timeline) and never speculation.
 8. suggested_format: reel = entertaining or viral stories; carousel = explainers with steps or facts; story = quick heads-up or something time-sensitive; feed = single announcement.
 9. slides: for carousel only, 3 to 5 short slides (max 140 characters each): the hook, the facts or steps, the takeaway. For every other format slides is an empty list.
 10. priority_adjust: integer from -10 to 10 (higher if lots of Kenyans are talking about it or it is time-sensitive, lower if minor or stale).
+11. image_query: 2 to 4 generic words for a free stock photo that fits the mood or topic, such as objects, places, music gear or textures. Never a real person's name, never a crash, injury or violence, and never people at all for sensitive topics.
+12. audio_idea: a short phrase for the mood or genre of music that would suit a Reel or Story about this, for example 'upbeat gengetone beat'. Never name copyrighted songs or artists. Leave it empty for sad or sensitive stories.
 
-Keys: skip (boolean), skip_reason, topic (short label), claim_status, priority_adjust, risk, headline (max 9 words, no emoji), rewritten_text, caption (rewritten_text plus one call-to-action line, max 2 emojis), hashtags (6-10, include #{TAG}), suggested_format, slides, media_suggestion (one sentence), deadline (ISO 8601 or null)."""
+Keys: skip (boolean), skip_reason, topic (short label), claim_status, priority_adjust, risk, headline (max 9 words, no emoji), rewritten_text, caption (rewritten_text plus one call-to-action line, max 2 emojis), hashtags (6-10, include #{TAG}), suggested_format, slides, media_suggestion (one sentence), image_query, audio_idea, deadline (ISO 8601 or null)."""
 
 
 def _e(key, default=""):
@@ -223,5 +225,7 @@ def rewrite(title, text, source_name, trust, topic_hint, claim_hint):
         "suggested_format": fmt,
         "slides": slides,
         "media_suggestion": str(d.get("media_suggestion") or ""),
+        "image_query": str(d.get("image_query") or "")[:60],
+        "audio_idea": str(d.get("audio_idea") or "")[:80],
         "deadline": _iso(d.get("deadline")),
     }

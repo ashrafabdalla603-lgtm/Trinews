@@ -51,8 +51,14 @@ def score(text, trust=3, published=None):
         s += 8
     if re.search(EDU, t):
         s += 12                               # edutainment bonus: a learning angle
-    if published and dt.datetime.now(dt.timezone.utc) - published < dt.timedelta(hours=2):
-        s += 5
+    if published:
+        age = dt.datetime.now(dt.timezone.utc) - published
+        if age < dt.timedelta(hours=2):
+            s += 5
+        elif age > dt.timedelta(hours=12):
+            s -= 10                           # stale news sinks
+        elif age > dt.timedelta(hours=6):
+            s -= 5
     s += {5: 5, 4: 2, 2: -5, 1: -10}.get(trust, 0)
     hint = "speculation" if re.search(SPEC, t) else ("confirmed" if trust >= 5 else "unverified")
     return max(0, min(100, s)), topic, hint

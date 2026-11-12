@@ -22,7 +22,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: fc-list | grep -qi liberation || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-liberation)
-      - run: python worker/run_fetch.py
+      - run: python run_fetch.py
         env:
           ONLY_TIPS: ${{ (github.event.schedule == '2-57/5 * * * *' || inputs.only_tips == true) && '1' || '' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

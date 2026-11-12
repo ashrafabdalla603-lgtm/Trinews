@@ -1,9 +1,14 @@
 name: fetch
 on:
   schedule:
-    - cron: "11,41 * * * *"    # full fetch: news feeds, Google Trends, your tips (off the busy :00 and :30 marks)
+    - cron: "6,21,36,51 * * * *"   # full fetch: news feeds, YouTube, Google Trends, your tips
     - cron: "2-57/5 * * * *"   # tips only: messages you send the bot become drafts within minutes
   workflow_dispatch:
+    inputs:
+      only_tips:
+        description: "Only read my Telegram tips (used by an outside timer)"
+        type: boolean
+        default: false
 concurrency: fetch
 jobs:
   run:
@@ -19,7 +24,7 @@ jobs:
       - run: fc-list | grep -qi liberation || (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-liberation)
       - run: python worker/run_fetch.py
         env:
-          ONLY_TIPS: ${{ github.event.schedule == '2-57/5 * * * *' && '1' || '' }}
+          ONLY_TIPS: ${{ (github.event.schedule == '2-57/5 * * * *' || inputs.only_tips == true) && '1' || '' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

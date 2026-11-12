@@ -26,7 +26,7 @@ AUTO_SKIP = {"HOT-TOPIC", "CELEBRITY", "RELATIONSHIPS", "VIRAL"}   # never poste
 
 def load_settings(sb):
     cfg = {"auto_publish": "off", "auto_min_score": "70", "auto_min_trust": "3",
-           "auto_daily_cap": "6", "auto_delay_min": "10"}
+           "auto_daily_cap": "6", "auto_delay_min": "10", "bin_days": "34"}
     try:
         for r in sb.table("settings").select("key,value").execute().data:
             cfg[r["key"]] = str(r["value"])
@@ -78,11 +78,14 @@ def main():
     now = dt.datetime.now(UTC)
     problems = []
     cfg = load_settings(sb)
-    try:    # unreviewed drafts expire, which also keeps old news from being posted
+    try:    # unreviewed drafts move to the Bin, and the Bin empties itself after bin_days
         cutoff = (now - dt.timedelta(hours=PENDING_TTL)).isoformat()
-        sb.table("items").update({"status": "rejected", "note": "Expired: not reviewed in time"}).eq("status", "pending").lt("fetched_at", cutoff).execute()
+        sb.table("items").update({"status": "deleted", "deleted_at": now.isoformat(), "note": "Expired: not reviewed in time"}) \
+            .eq("status", "pending").lt("fetched_at", cutoff).execute()
+        purge = (now - dt.timedelta(days=int(cfg.get("bin_days", "34")))).isoformat()
+        sb.table("items").delete().eq("status", "deleted").lt("deleted_at", purge).execute()
     except Exception as ex:
-        print(f"[expire] {ex}")
+        print(f"[bin] {ex} (did you run the 005 SQL?)")
     auto_used = auto_count(sb, now) if cfg["auto_publish"] == "on" else 0
     auto_ids = set()
 
@@ -90,7 +93,7 @@ def main():
     for s in srcs:
         try:
             entries = fetch_source(s, sb)
-            if not entries and s["type"] == "rss":
+            if not entries and s["type"] in ("rss", "youtube"):
                 raise RuntimeError("no stories found, check the feed address")
             ok_sources += 1
             for e in entries:
@@ -140,15 +143,17 @@ def main():
             break
         s = c["source"]
         try:
-            r = rewrite(c["title"], c["text"], s["name"], s["trust_level"], topic, hint)
+            r = rewrite(c["title"], c["text"], s["name"], s["trust_level"], topic, hint, image=c.get("image"))
         except Exception as ex:
             ai_failed += 1
             print(f"[rewrite] {c['url']}: {ex}")
             if len(problems) < 8:
                 problems.append(f"AI: {str(ex)[:140]}")
+            if c.get("force"):
+                notify(f"⚠️ I could not draft your tip ({str(ex)[:120]}). Send it again in a while.")
             continue
         row = {"source_id": s["id"], "source_name": s["name"], "source_url": c["url"],
-               "original_title": c["title"], "original_text": c["text"][:6000], "topic": r["topic"]}
+               "original_title": c["title"], "original_text": ((r["transcript"] if c.get("image") else "") or c["text"])[:6000], "topic": r["topic"]}
         if r["skip"]:
             row.update(status="rejected", note=r["skip_reason"] or "Skipped by the editor AI")
         else:
@@ -231,7 +236,7 @@ def main():
         summary += "\nProblems:\n- " + "\n- ".join(problems[:8])
     print(summary)
     # A manual run always reports. A scheduled run reports only when it looks broken.
-    manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch" and not ONLY_TIPS
     broken = (ok_sources == 0 and not ONLY_TIPS) or (ai_failed and not new)
     if manual or broken or os.getenv("FETCH_REPORT") == "always":
         notify(summary)

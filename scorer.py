@@ -8,7 +8,7 @@ import datetime as dt
 TOPICS = [
     # gossip, entertainment and daily life
     ("CELEBRITY", 84, r"celebrit|\bcelebs?\b|gossip|baby mama|baby daddy|breakup|wedding|big day|influencer|\bactor\b|actress|\bhosted\b|\bbash\b"),
-    ("MUSIC", 82, r"\bsong\b|album|\bep\b|concert|\bgig\b|\btour\b|artiste|musician|rapper|singer|gengetone|bongo|amapiano|gospel|\bdj\b|music video"),
+    ("MUSIC", 82, r"\bsong\b|album|\bep\b|concert|\bgig\b|\btour\b|artiste|musician|rapper|singer|gengetone|bongo|amapiano|gospel|\bdj\b|music video|new single|\btickets?\b|line-?up|\bdrops\b"),
     ("VIRAL", 82, r"viral|trending|tiktok|youtuber|tiktoker|\bmeme|challenge|netizens|\bx users\b|backlash|outrage"),
     ("RELATIONSHIPS", 78, r"cheat|divorce|marries|engaged|pregnan|\bex-(wife|husband|girlfriend|boyfriend)|lover|couple|girlfriend|boyfriend|dating"),
     ("SCREEN", 76, r"movie|\bfilm\b|series|netflix|showmax|\btv show\b|premiere|box office|reality show|drama|interview|podcast"),

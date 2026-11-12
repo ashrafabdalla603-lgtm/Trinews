@@ -104,9 +104,9 @@ def _store(sb, data, name, ctype):
 
 
 def fetch_tips(s, sb):
-    """Messages you send to your Tri News Alerts bot become story tips. This is the safe way to use gossip
-    pages we cannot read ourselves: send the text (a caption is enough), start with the page name. A photo or
-    video you attach is used on the post, so only attach media you own or have permission to use."""
+    """Messages you send to your Tri News Alerts bot become story tips. Send text, or just a screenshot of a gossip
+    story: the AI reads it and credits the page. A photo or video is only posted when the caption says 'use photo'
+    or 'use video', so someone else's screenshot is never republished. Only attach media you own or may use."""
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN"), str(os.getenv("TELEGRAM_CHAT_ID") or "")
     if not (tok and chat):
         return []
@@ -115,24 +115,32 @@ def fetch_tips(s, sb):
                      params={"offset": offset, "timeout": 0}, timeout=20)
     r.raise_for_status()
     out, last = [], offset - 1
+    use_rx = re.compile(r"\buse (this |my |the )?(photo|pic|picture|image|video|clip|it)\b", re.I)
     for u in r.json().get("result", []):
         last = max(last, u["update_id"])
         m = u.get("message") or {}
-        text = (m.get("text") or m.get("caption") or "").strip()
-        if str((m.get("chat") or {}).get("id")) != chat or text.startswith("/") or len(text) < 25:
-            continue                          # only you, only real text
+        raw = (m.get("text") or m.get("caption") or "").strip()
+        photo, video = m.get("photo"), m.get("video")
+        if str((m.get("chat") or {}).get("id")) != chat or raw.startswith("/"):
+            continue                          # only you
+        use = bool(use_rx.search(raw))
+        text = use_rx.sub("", raw).strip()
+        if len(text) < 25 and not photo:
+            continue                          # real text, or a screenshot
         link = re.search(r"https?://\S+", text)
-        entry = {"title": text.split("\n")[0][:140],
+        entry = {"title": text.split("\n")[0][:140] if text else "Screenshot tip",
                  "url": link.group(0) if link else f"tip://{u['update_id']}",
                  "text": text,
                  "published": dt.datetime.fromtimestamp(m.get("date", 0), dt.timezone.utc),
                  "force": True}
         try:
-            if m.get("photo"):
-                data, ext = _tg_file(tok, m["photo"][-1]["file_id"])
-                entry["photo_url"] = _store(sb, data, f"tip-{u['update_id']}.{ext}", "image/jpeg")
-            elif m.get("video") and (m["video"].get("file_size") or 0) < 19_000_000:
-                data, ext = _tg_file(tok, m["video"]["file_id"])
+            if photo:
+                data, ext = _tg_file(tok, photo[-1]["file_id"])
+                entry["image"] = data         # read by the AI
+                if use:
+                    entry["photo_url"] = _store(sb, data, f"tip-{u['update_id']}.{ext}", "image/jpeg")
+            elif video and use and (video.get("file_size") or 0) < 19_000_000:
+                data, ext = _tg_file(tok, video["file_id"])
                 entry["video_url"] = _store(sb, data, f"tip-{u['update_id']}.{ext}", "video/mp4")
         except Exception as ex:
             print(f"[tips] attachment skipped: {ex}")
@@ -178,6 +186,31 @@ def fetch_trends(s):
     return [o for o in out if o["url"]]
 
 
+def fetch_youtube(s, sb):
+    """New uploads from a YouTube channel through YouTube's own public feed. Add a channel link or @handle in Sources."""
+    state = s.get("state") or {}
+    cid = state.get("channel_id")
+    if not cid:
+        m = re.search(r"channel/(UC[\w-]{22})", s["url"])
+        if not m:
+            page = requests.get(s["url"], headers={**UA, "Accept-Language": "en"}, timeout=30)
+            page.raise_for_status()
+            m = (re.search(r"feeds/videos\.xml\?channel_id=(UC[\w-]{22})", page.text)
+                 or re.search(r'"(?:channelId|externalId)":"(UC[\w-]{22})"', page.text))
+        if not m:
+            raise RuntimeError("could not find the channel id, paste the full channel link")
+        cid = m.group(1)
+        sb.table("sources").update({"state": {**state, "channel_id": cid}}).eq("id", s["id"]).execute()
+    feed = feedparser.parse(f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}", request_headers=UA)
+    out = []
+    for e in feed.entries[:15]:
+        pub = dt.datetime(*e.published_parsed[:6], tzinfo=dt.timezone.utc) if getattr(e, "published_parsed", None) else None
+        desc = _clean(e.get("summary") or e.get("media_description") or "")
+        out.append({"title": e.get("title", ""), "url": e.get("link"), "published": pub,
+                    "text": f"New YouTube video from {s['name']}: {e.get('title', '')}. {desc[:700]}"})
+    return [o for o in out if o["url"]]
+
+
 def fetch_source(s, sb):
     if s["type"] == "watch":
         return fetch_watch(s, sb)
@@ -185,4 +218,6 @@ def fetch_source(s, sb):
         return fetch_tips(s, sb)
     if s["type"] == "trends":
         return fetch_trends(s)
+    if s["type"] == "youtube":
+        return fetch_youtube(s, sb)
     return fetch_rss(s)

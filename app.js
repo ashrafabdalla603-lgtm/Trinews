@@ -11,7 +11,7 @@ const FORMATS = ["feed", "carousel", "reel", "story"];
 const FMT = { feed: "Feed", carousel: "Carousel", reel: "Reel", story: "Story" };
 const CLAIMS = ["confirmed", "unverified", "speculation"];
 const LABEL = { confirmed: "Confirmed", unverified: "Unconfirmed", speculation: "Speculation" };
-const FILTERS = [["pending", "Pending"], ["approved", "Approved"], ["publishing", "Posting"], ["published", "Posted"], ["failed", "Failed"], ["rejected", "Rejected"]];
+const FILTERS = [["pending", "Pending"], ["approved", "Approved"], ["publishing", "Posting"], ["published", "Posted"], ["failed", "Failed"], ["rejected", "Rejected"], ["deleted", "Bin"]];
 const LABEL_RX = /unconfirmed|speculation|rumou?r|reportedly|allegedly/i;
 const CHEV = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0A2A1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>`;
 const mark = (px, style = "") => `<svg width="${px}" height="${px}" viewBox="0 0 512 512" style="${style}" aria-hidden="true"><use href="#mk"/></svg>`;
@@ -23,8 +23,10 @@ const claim = c => `<span class="cl cl-${esc(c)}">${esc(LABEL[c] || c)}</span>`;
 const pill = n => `<span class="p ${n >= 85 ? "u" : ""}">${n}</span>`;
 const tags = v => v.split(/[\s,]+/).filter(Boolean).map(t => t.startsWith("#") ? t : "#" + t);
 const lines = v => v.split("\n").map(s => s.trim()).filter(Boolean).slice(0, 8);
+const plural = n => (n === 1 ? "" : "s");
 
-let filter = "pending", cur = null, feed = null;
+let filter = "pending", cur = null, feed = null, selecting = false, shown = [], binDays = 34;
+const picked = new Set();
 
 const row = i => `
 <a class="c" href="#item=${esc(i.id)}">
@@ -33,6 +35,13 @@ const row = i => `
   <p class="x">${esc((i.rewritten_text || i.original_text || "").slice(0, 140))}</p>
   <div class="ft"><span>${esc(i.source_name)}, ${ago(i.source_published || i.fetched_at)}${i.source_published && Date.now() - new Date(i.source_published) > 864e5 ? ' <b class="err">old</b>' : ""}</span><span>${esc(FMT[i.suggested_format] || "")}</span></div>
 </a>`;
+
+const pickRow = i => `
+<div class="c" data-pick="${esc(i.id)}" style="cursor:pointer;${picked.has(i.id) ? "outline:3px solid var(--leaf);" : ""}">
+  <div class="r"><span data-box style="font-size:22px;line-height:1">${picked.has(i.id) ? "☑" : "☐"}</span>${pill(i.priority_score)}<span class="tp">${esc(i.topic)}</span>${claim(i.claim_status)}</div>
+  <h2 class="h">${esc(i.headline || i.original_title)}</h2>
+  <p class="x">${esc((i.rewritten_text || i.original_text || "").slice(0, 100))}</p>
+</div>`;
 
 async function uploadFile(file, key) {
   if (file.size > 50 * 1024 * 1024) throw new Error("That file is over 50 MB. Trim the video or pick a smaller one.");
@@ -78,12 +87,34 @@ function loginView(msg = "") {
   };
 }
 
+function renderBar() {
+  const el = $("#barin");
+  if (!el) return;
+  el.innerHTML = `
+    <div class="r" style="margin-bottom:8px"><b style="flex:1">${picked.size} selected</b><button class="ghost" data-bulk="all">All</button></div>
+    <div class="acts" style="margin:0">${filter === "deleted"
+      ? `<button class="bt" data-bulk="restore">Restore</button><button class="bt no" data-bulk="purge">Delete forever</button>`
+      : `<button class="bt no" data-bulk="delete">Delete</button><button class="bt go" data-bulk="approve">Approve</button>`}</div>`;
+}
+
+function togglePick(el) {
+  const id = el.dataset.pick;
+  picked.has(id) ? picked.delete(id) : picked.add(id);
+  el.style.outline = picked.has(id) ? "3px solid var(--leaf)" : "";
+  const box = el.querySelector("[data-box]");
+  if (box) box.textContent = picked.has(id) ? "☑" : "☐";
+  renderBar();
+}
+
 async function showQueue() {
-  const [{ data, error }, all] = await Promise.all([
-    sb.from("items").select("id,topic,risk,claim_status,priority_score,headline,original_title,rewritten_text,original_text,source_name,fetched_at,source_published,suggested_format")
-      .eq("status", filter).order("priority_score", { ascending: false }).order("fetched_at", { ascending: false }).limit(40),
+  const [{ data, error }, all, bd] = await Promise.all([
+    sb.from("items").select("id,topic,risk,claim_status,priority_score,headline,original_title,rewritten_text,original_text,caption,channels,source_name,fetched_at,source_published,suggested_format")
+      .eq("status", filter).order("priority_score", { ascending: false }).order("fetched_at", { ascending: false }).limit(100),
     sb.from("items").select("status,priority_score").limit(1000),
+    sb.from("settings").select("value").eq("key", "bin_days"),
   ]);
+  binDays = parseInt(bd.data && bd.data[0] && bd.data[0].value, 10) || 34;
+  shown = data || [];
   const counts = {};
   let waiting = 0, urgent = 0;
   (all.data || []).forEach(r => {
@@ -92,11 +123,54 @@ async function showQueue() {
   });
   $("#app").innerHTML = `
     <header class="top">${mark(36)}<h1>Review queue</h1><button class="ghost" data-out>Sign out</button></header>
-    <div class="acts" style="margin:0 0 12px"><a class="bt go" href="#new" style="display:flex;align-items:center;justify-content:center;text-decoration:none">New post</a><a class="bt" href="#settings" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Settings</a></div>
+    <div class="acts" style="margin:0 0 12px">
+      <a class="bt go" href="#new" style="display:flex;align-items:center;justify-content:center;text-decoration:none">New post</a>
+      <button class="bt" data-select>${selecting ? "Done" : "Select"}</button>
+      <a class="bt" href="#settings" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Settings</a>
+    </div>
     <p class="mut">${waiting ? `${waiting} waiting. ${urgent} ${urgent === 1 ? "is" : "are"} urgent.` : "Nothing waiting."}</p>
     <nav class="chips">${FILTERS.map(([v, t]) => `<button class="ch ${v === filter ? "on" : ""}" data-f="${v}">${t}${counts[v] ? " " + counts[v] : ""}</button>`).join("")}</nav>
+    ${filter === "deleted" ? `<p class="mut">Deleted items stay here for ${binDays} days, then disappear for good.</p>` : ""}
     ${error ? `<p class="err">Could not load items: ${esc(error.message)}. Sign in with the admin email set in the SQL policy, and run the newest SQL files.</p>`
-      : (data.map(row).join("") || `<p class="mut">Nothing here. New items appear when the next fetch runs.</p>`)}`;
+      : (shown.map(selecting ? pickRow : row).join("") || `<p class="mut">Nothing here. New items appear when the next fetch runs.</p>`)}
+    ${selecting ? `<div style="height:150px"></div><div style="position:fixed;left:0;right:0;bottom:0;z-index:5;background:#fff;border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom))"><div id="barin" style="max-width:560px;margin:0 auto"></div></div>` : ""}`;
+  renderBar();
+}
+
+async function bulk(kind) {
+  if (kind === "all") {
+    const every = shown.length > 0 && shown.every(i => picked.has(i.id));
+    picked.clear();
+    if (!every) shown.forEach(i => picked.add(i.id));
+    return showQueue();
+  }
+  const ids = [...picked];
+  if (!ids.length) return alert("Pick at least one item first.");
+  const now = new Date().toISOString();
+  let error = null;
+  if (kind === "delete") {
+    if (!confirm(`Move ${ids.length} item${plural(ids.length)} to the Bin? You can restore them for ${binDays} days.`)) return;
+    ({ error } = await sb.from("items").update({ status: "deleted", deleted_at: now }).in("id", ids).neq("status", "publishing"));
+  } else if (kind === "restore") {
+    ({ error } = await sb.from("items").update({ status: "pending", deleted_at: null, note: null, fetched_at: now }).in("id", ids).eq("status", "deleted"));
+  } else if (kind === "purge") {
+    if (!confirm(`Delete ${ids.length} item${plural(ids.length)} forever? This cannot be undone.`)) return;
+    ({ error } = await sb.from("items").delete().in("id", ids).eq("status", "deleted"));
+  } else if (kind === "approve") {
+    const chosen = shown.filter(i => picked.has(i.id));
+    const bad = chosen.filter(i => !i.headline || !i.rewritten_text || !(i.channels || []).length
+      || (i.claim_status !== "confirmed" && !LABEL_RX.test(`${i.rewritten_text} ${i.caption}`)));
+    const good = chosen.filter(i => !bad.includes(i));
+    if (!good.length) return alert("None of these can be approved yet. Each needs a headline, text, a place to post, and “Unconfirmed:” or “Speculation:” in the text when it is not marked Confirmed.");
+    const unsure = good.filter(i => i.claim_status !== "confirmed").length;
+    if (!confirm(`Approve ${good.length} item${plural(good.length)}?${unsure ? ` ${unsure} are not marked Confirmed.` : ""}${bad.length ? ` ${bad.length} will be skipped (missing text or label).` : ""} They post two every 15 minutes.`)) return;
+    ({ error } = await sb.from("items").update({ status: "approved", approved_at: now, publish_after: null, auto_approved: false, note: null })
+      .in("id", good.map(i => i.id)).in("status", ["pending", "failed", "rejected"]));
+  }
+  if (error) return alert(error.message);
+  picked.clear();
+  selecting = false;
+  showQueue();
 }
 
 const seg = (key, label, vals, now) => `
@@ -153,6 +227,7 @@ async function showReview(id) {
     <p class="mut">Media idea: ${esc(it.media_suggestion)}</p>
     ${canAct ? `<div class="acts"><button class="bt no" data-act="reject">Reject</button><button class="bt" data-act="save">Save</button><button class="bt go" data-act="approve">Approve and queue</button></div>`
       : it.status === "approved" ? `<div class="acts"><button class="bt" data-act="pullback">Pull back to pending</button></div>`
+      : it.status === "deleted" ? `<div class="acts"><button class="bt go" data-act="restore">Restore to pending</button></div>`
       : `<p class="mut">Status: ${esc(it.status)}</p>`}`;
 }
 
@@ -160,6 +235,10 @@ async function act(a, btn) {
   if (a === "nomedia") {
     if (!confirm("Remove the photo or video? The post will use the plain card.")) return;
     const { error } = await sb.from("items").update({ photo_url: null, video_url: null, photo_credit: null, use_stock: false }).eq("id", cur.id);
+    return error ? alert(error.message) : showReview(cur.id);
+  }
+  if (a === "restore") {
+    const { error } = await sb.from("items").update({ status: "pending", deleted_at: null, note: null, fetched_at: new Date().toISOString() }).eq("id", cur.id);
     return error ? alert(error.message) : showReview(cur.id);
   }
   if (a === "pullback") {
@@ -292,6 +371,7 @@ async function showSettings() {
   $("#app").innerHTML = `
     <header class="top"><button class="back" data-back aria-label="Back to the queue">${CHEV}</button><h1>Settings</h1></header>
     ${error ? `<p class="err">Could not load settings: ${esc(error.message)}. Run the 004 SQL first.</p>` : ""}
+    <a class="bt" href="#sources" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Manage news sources</a>
     <div class="lb">Auto-publish confirmed news
       <label class="ck"><input type="checkbox" id="s-on" ${s.auto_publish === "on" ? "checked" : ""}>Let safe, confirmed stories post without my approval</label>
     </div>
@@ -300,6 +380,7 @@ async function showSettings() {
     <label class="lb">Minimum source trust, 1 to 5<input class="in" id="s-trust" inputmode="numeric" value="${g("auto_min_trust", 3)}"></label>
     <label class="lb">Most auto-posts per day<input class="in" id="s-cap" inputmode="numeric" value="${g("auto_daily_cap", 6)}"></label>
     <label class="lb">Minutes to wait before posting<input class="in" id="s-delay" inputmode="numeric" value="${g("auto_delay_min", 10)}"></label>
+    <label class="lb">Days to keep deleted items in the Bin<input class="in" id="s-bin" inputmode="numeric" value="${g("bin_days", 34)}"></label>
     <div class="acts"><button class="bt go" data-act="save-settings">Save settings</button></div>`;
 }
 
@@ -311,6 +392,7 @@ async function saveSettings() {
     { key: "auto_min_trust", value: num("s-trust", 1, 5, 3) },
     { key: "auto_daily_cap", value: num("s-cap", 0, 50, 6) },
     { key: "auto_delay_min", value: num("s-delay", 1, 120, 10) },
+    { key: "bin_days", value: num("s-bin", 1, 365, 34) },
   ];
   const { error } = await sb.from("settings").upsert(rowsData, { onConflict: "key" });
   if (error) return alert(`Could not save: ${error.message}`);
@@ -318,12 +400,63 @@ async function saveSettings() {
   location.hash = "";
 }
 
+async function showSources() {
+  cur = { kind: "youtube" };
+  const { data, error } = await sb.from("sources").select("id,name,url,type,active").order("type").order("name");
+  $("#app").innerHTML = `
+    <header class="top"><button class="back" data-back aria-label="Back to the queue">${CHEV}</button><h1>Sources</h1></header>
+    ${error ? `<p class="err">Could not load sources: ${esc(error.message)}. Run the 005 SQL first.</p>` : ""}
+    <p class="mut">Where Tri News looks for stories. Instagram, Facebook and TikTok pages cannot be added, because they block automatic reading. For those, send a screenshot of the story to your Telegram bot.</p>
+    <div class="lb">Add a source
+      <input class="in" id="a-name" placeholder="Name, for example Bahati on YouTube">
+      <input class="in" id="a-url" placeholder="Channel link, @handle, or feed link" autocapitalize="off" style="margin-top:8px">
+      <div class="sg" style="margin-top:8px"><button type="button" data-kind="youtube" class="on">YouTube channel</button><button type="button" data-kind="rss">News feed</button></div>
+      <button class="bt go" data-act="add-source" style="margin-top:8px">Add</button>
+    </div>
+    ${(data || []).map(s => `
+      <div class="c" style="gap:6px">
+        <div class="r"><b style="flex:1">${esc(s.name)}</b><span class="tp" style="flex:none">${esc(s.type)}</span></div>
+        <span class="mut" style="word-break:break-all">${esc(s.url.slice(0, 90))}</span>
+        <div class="acts" style="margin-top:4px"><button class="bt" data-src="${esc(s.id)}" data-active="${s.active}">${s.active ? "On, tap to switch off" : "Off, tap to switch on"}</button><button class="bt no" data-del-src="${esc(s.id)}">Remove</button></div>
+      </div>`).join("")}`;
+}
+
+async function addSource() {
+  const name = $("#a-name").value.trim();
+  let url = $("#a-url").value.trim();
+  if (!name || !url) return alert("Add a name and a link.");
+  if (cur.kind === "youtube") {
+    if (/^UC[\w-]{22}$/.test(url)) url = `https://www.youtube.com/channel/${url}`;
+    else if (!/^https?:/.test(url)) url = `https://www.youtube.com/@${url.replace(/^@/, "")}`;
+  } else if (!/^https?:/.test(url)) return alert("Paste the full feed link, starting with https.");
+  const { error } = await sb.from("sources").insert({ name, url, type: cur.kind, category: cur.kind === "youtube" ? "youtube" : "custom", trust_level: 3 });
+  if (error) return alert(`Could not add it: ${error.message}`);
+  showSources();
+}
+
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-f],[data-out],[data-back],[data-seg],[data-act]");
+  const t = e.target.closest("[data-f],[data-out],[data-back],[data-seg],[data-act],[data-pick],[data-bulk],[data-select],[data-kind],[data-src],[data-del-src]");
   if (!t) return;
-  if (t.dataset.f) { filter = t.dataset.f; return showQueue(); }
+  if (t.dataset.f) { filter = t.dataset.f; picked.clear(); return showQueue(); }
   if (t.hasAttribute("data-out")) { await sb.auth.signOut(); return loginView(); }
   if (t.hasAttribute("data-back")) { location.hash = ""; return; }
+  if (t.dataset.pick) return togglePick(t);
+  if (t.dataset.bulk) return bulk(t.dataset.bulk);
+  if (t.hasAttribute("data-select")) { selecting = !selecting; picked.clear(); return showQueue(); }
+  if (t.dataset.kind) {
+    cur.kind = t.dataset.kind;
+    t.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === t));
+    return;
+  }
+  if (t.dataset.src) {
+    const { error } = await sb.from("sources").update({ active: t.dataset.active !== "true" }).eq("id", t.dataset.src);
+    return error ? alert(error.message) : showSources();
+  }
+  if (t.dataset.delSrc) {
+    if (!confirm("Remove this source? Its past stories stay in the app.")) return;
+    const { error } = await sb.from("sources").delete().eq("id", t.dataset.delSrc);
+    return error ? alert(error.message) : showSources();
+  }
   if (t.dataset.seg) {
     cur[t.dataset.seg] = t.dataset.v;
     t.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === t));
@@ -333,6 +466,7 @@ document.addEventListener("click", async e => {
   const a = t.dataset.act;
   if (a === "n-draft" || a === "n-approve") return saveNew(a === "n-approve");
   if (a === "save-settings") return saveSettings();
+  if (a === "add-source") return addSource();
   return act(a, t);
 });
 
@@ -362,6 +496,7 @@ const route = () => {
   if (itemId()) return showReview(itemId());
   if (location.hash === "#new") return showNew();
   if (location.hash === "#settings") return showSettings();
+  if (location.hash === "#sources") return showSources();
   return showQueue();
 };
 window.addEventListener("hashchange", async () => {
@@ -374,7 +509,7 @@ async function start() {
   if (!READY) return setupView();
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return loginView();
-  if (!feed) feed = sb.channel("items-feed").on("postgres_changes", { event: "INSERT", schema: "public", table: "items" }, () => { if (onQueue()) showQueue(); }).subscribe();
+  if (!feed) feed = sb.channel("items-feed").on("postgres_changes", { event: "INSERT", schema: "public", table: "items" }, () => { if (onQueue() && !selecting) showQueue(); }).subscribe();
   route();
 }
 

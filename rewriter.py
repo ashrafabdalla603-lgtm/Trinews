@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -29,8 +30,9 @@ Rules
 10. priority_adjust: integer from -10 to 10 (higher if lots of Kenyans are talking about it or it is time-sensitive, lower if minor or stale).
 11. image_query: 2 to 4 generic words for a free stock photo that fits the mood or topic, such as objects, places, music gear or textures. Never a real person's name, never a crash, injury or violence, and never people at all for sensitive topics.
 12. audio_idea: a short phrase for the mood or genre of music that would suit a Reel or Story about this, for example 'upbeat gengetone beat'. Never name copyrighted songs or artists. Leave it empty for sad or sensitive stories.
+13. If an image is attached it is a screenshot of someone else's social media post. Read the text in it, copy exactly what you read into transcript, and use only what it says as your facts. Credit the page if its name is visible ("as posted on ..."). Never describe or reuse the picture itself, and write in your own words.
 
-Keys: skip (boolean), skip_reason, topic (short label), claim_status, priority_adjust, risk, headline (max 9 words, no emoji), rewritten_text, caption (rewritten_text plus one call-to-action line, max 2 emojis), hashtags (6-10, include #{TAG}), suggested_format, slides, media_suggestion (one sentence), image_query, audio_idea, deadline (ISO 8601 or null)."""
+Keys: skip (boolean), skip_reason, topic (short label), claim_status, priority_adjust, risk, headline (max 9 words, no emoji), rewritten_text, caption (rewritten_text plus one call-to-action line, max 2 emojis), hashtags (6-10, include #{TAG}), suggested_format, slides, media_suggestion (one sentence), image_query, audio_idea, deadline, transcript (only when an image is attached: the exact text you read in it, otherwise empty) (ISO 8601 or null)."""
 
 
 def _e(key, default=""):
@@ -110,17 +112,20 @@ def _pace():
     _last[0] = time.time()
 
 
-def _call(prov, model, user):
+def _call(prov, model, user, image=None):
     if prov == "anthropic":
         import anthropic
         msg = anthropic.Anthropic().messages.create(
             model=model, max_tokens=1000, system=SYSTEM, messages=[{"role": "user", "content": user}])
         return "".join(b.text for b in msg.content if b.type == "text")
     if prov == "gemini":
+        parts = [{"text": user}]
+        if image:
+            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(image).decode()}})
         data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                      {"x-goog-api-key": _key("GEMINI_API_KEY")},
                      {"systemInstruction": {"parts": [{"text": SYSTEM}]},
-                      "contents": [{"role": "user", "parts": [{"text": user}]}],
+                      "contents": [{"role": "user", "parts": parts}],
                       "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2000,
                                            "temperature": 0.7}})
         return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -134,20 +139,20 @@ def _call(prov, model, user):
     raise AIError(f"unknown AI_PROVIDER '{prov}'", 400)
 
 
-def _ask(user):
+def _ask(user, image=None):
     """Tries every model in order. Waits out short rate limits, retries when Google is overloaded,
     and skips a model for the rest of the run once its quota is gone or its name or key is wrong."""
     errors = []
     for prov, model in TARGETS:
         key = (prov, model)
-        if key in _dead:
+        if key in _dead or (image and prov != "gemini"):   # only Gemini reads pictures here
             continue
         for attempt in range(3):
             if time.time() - _t0 > float(_e("AI_BUDGET", "540")):
                 raise RuntimeError("; ".join(errors[-3:]) + " (the AI time budget for this run is used up)")
             try:
                 _pace()
-                return _call(prov, model, user)
+                return _call(prov, model, user, image)
             except AIError as ex:
                 errors.append(f"{prov} {model}: {str(ex)[:150]}")
                 if ex.status == 429:
@@ -171,7 +176,7 @@ def _ask(user):
                 errors.append(f"{prov} {model}: {str(ex)[:150]}")
                 _dead.add(key)
                 break
-    raise RuntimeError("; ".join(errors[-3:]) or "no AI model available")
+    raise RuntimeError("; ".join(errors[-3:]) or ("no AI model that can read screenshots is available (needs Gemini)" if image else "no AI model available"))
 
 
 def _iso(v):
@@ -181,14 +186,14 @@ def _iso(v):
         return None
 
 
-def rewrite(title, text, source_name, trust, topic_hint, claim_hint):
+def rewrite(title, text, source_name, trust, topic_hint, claim_hint, image=None):
     payload = {"title": title, "text": text[:3000], "source_name": source_name,
-               "source_trust": trust, "topic_hint": topic_hint, "claim_hint": claim_hint}
+               "source_trust": trust, "topic_hint": topic_hint, "claim_hint": claim_hint, "image_attached": bool(image)}
     user = json.dumps(payload, ensure_ascii=False)
     d, last = None, None
     for _ in range(2):
         try:
-            raw = _ask(user)
+            raw = _ask(user, image)
             d = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
             if not d.get("skip") and not d.get("rewritten_text"):
                 raise ValueError("empty rewrite")
@@ -227,5 +232,6 @@ def rewrite(title, text, source_name, trust, topic_hint, claim_hint):
         "media_suggestion": str(d.get("media_suggestion") or ""),
         "image_query": str(d.get("image_query") or "")[:60],
         "audio_idea": str(d.get("audio_idea") or "")[:80],
+        "transcript": str(d.get("transcript") or "")[:1500],
         "deadline": _iso(d.get("deadline")),
     }

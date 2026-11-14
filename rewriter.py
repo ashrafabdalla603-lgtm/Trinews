@@ -20,7 +20,7 @@ Reply with ONE JSON object only. No markdown, no commentary.
 Rules
 1. Use only facts present in the input. Never add names, dates, numbers, links or quotes. If no deadline is stated, deadline is null.
 2. claim_status: "confirmed" = official source or a plainly verified fact; "unverified" = single source, nothing confirms it; "speculation" = rumour, "reportedly", "sources say", fan theory or prediction.
-3. Tone must match claim_status. confirmed: state it plainly. unverified: start with "Unconfirmed:". speculation: start with "Speculation:" and make clear nobody has confirmed it. Never present a rumour as fact.
+3. claim_status is a private tag for the editor. Never print it, and never write labels such as "Unconfirmed:" or "Speculation:" in the post. For unverified or speculative stories attribute naturally ("reportedly", "according to", "as posted on ...", "people are talking about") and never state a rumour as fact. For confirmed stories state it plainly.
 4. Celebrity, gossip and viral stories: report only what the source says and attribute it. If the text says where something was posted, credit it ("as posted on ..."). Never state as fact anything about crimes, health, sexuality, family disputes or money of a named person unless an official or on-record source confirms it. If it cannot be written safely, set skip to true and give skip_reason. risk is low, medium or high (high = a named person plus a sensitive allegation).
 5. Sensitive topics (politics, courts and laws, sexuality, religion, tribe, race, nationality, accidents, deaths, crime): report neutrally what happened, who said it, and what is proposed or decided. Attribute everything. No mockery, no insults, no generalisations about any group, no calls for hatred or violence, and no guessing about private lives. For viral stories about private people, stick to what is reported and do not name anyone who is not already named in the source. For accidents and deaths use calm wording, no graphic detail, no blame, and no victim names unless officially released. Set risk to high for these so a human reviews them.
 6. Official alerts (exams, tax, portals, government services) matter only when something is open, closing or changing soon: lead with the action and the date. Do not invent steps or links.
@@ -121,7 +121,8 @@ def _call(prov, model, user, image=None):
     if prov == "gemini":
         parts = [{"text": user}]
         if image:
-            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(image).decode()}})
+            mime = "image/png" if image[:4] == b"\x89PNG" else "image/webp" if image[:4] == b"RIFF" else "image/jpeg"
+            parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(image).decode()}})
         data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                      {"x-goog-api-key": _key("GEMINI_API_KEY")},
                      {"systemInstruction": {"parts": [{"text": SYSTEM}]},

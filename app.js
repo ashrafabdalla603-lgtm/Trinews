@@ -12,7 +12,6 @@ const FMT = { feed: "Feed", carousel: "Carousel", reel: "Reel", story: "Story" }
 const CLAIMS = ["confirmed", "unverified", "speculation"];
 const LABEL = { confirmed: "Confirmed", unverified: "Unconfirmed", speculation: "Speculation" };
 const FILTERS = [["pending", "Pending"], ["approved", "Approved"], ["publishing", "Posting"], ["published", "Posted"], ["failed", "Failed"], ["rejected", "Rejected"], ["deleted", "Bin"]];
-const LABEL_RX = /unconfirmed|speculation|rumou?r|reportedly|allegedly/i;
 const CHEV = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0A2A1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>`;
 const mark = (px, style = "") => `<svg width="${px}" height="${px}" viewBox="0 0 512 512" style="${style}" aria-hidden="true"><use href="#mk"/></svg>`;
 const ago = t => {
@@ -158,13 +157,12 @@ async function bulk(kind) {
     ({ error } = await sb.from("items").delete().in("id", ids).eq("status", "deleted"));
   } else if (kind === "approve") {
     const chosen = shown.filter(i => picked.has(i.id));
-    const bad = chosen.filter(i => !i.headline || !i.rewritten_text || !(i.channels || []).length
-      || (i.claim_status !== "confirmed" && !LABEL_RX.test(`${i.rewritten_text} ${i.caption}`)));
+    const bad = chosen.filter(i => !i.headline || !i.rewritten_text || !(i.channels || []).length);
     const good = chosen.filter(i => !bad.includes(i));
-    if (!good.length) return alert("None of these can be approved yet. Each needs a headline, text, a place to post, and “Unconfirmed:” or “Speculation:” in the text when it is not marked Confirmed.");
+    if (!good.length) return alert("None of these can be approved yet. Each needs a headline, text and a place to post.");
     const unsure = good.filter(i => i.claim_status !== "confirmed").length;
-    if (!confirm(`Approve ${good.length} item${plural(good.length)}?${unsure ? ` ${unsure} are not marked Confirmed.` : ""}${bad.length ? ` ${bad.length} will be skipped (missing text or label).` : ""} They post two every 15 minutes.`)) return;
-    ({ error } = await sb.from("items").update({ status: "approved", approved_at: now, publish_after: null, auto_approved: false, note: null })
+    if (!confirm(`Approve ${good.length} item${plural(good.length)}?${unsure ? ` ${unsure} are tagged Unconfirmed or Speculation.` : ""}${bad.length ? ` ${bad.length} will be skipped (missing headline or text).` : ""}`)) return;
+    ({ error } = await sb.from("items").update({ status: "approved", approved_at: now, publish_after: await undoAt(), auto_approved: false, note: null })
       .in("id", good.map(i => i.id)).in("status", ["pending", "failed", "rejected"]));
   }
   if (error) return alert(error.message);
@@ -192,6 +190,7 @@ const mediaBlock = (it, canAct) => `
     ${it.photo_url ? `<img class="pv" src="${esc(it.photo_url)}" alt="Photo for this post">` : ""}
     <span class="mut">${it.photo_credit ? `Free stock media: ${esc(it.photo_credit)}. ` : ""}${it.image_query ? `Search: ${esc(it.image_query)}. ` : ""}${!it.photo_url && !it.video_url ? "No photo or video yet, so the post uses the plain card. " : ""}Only add media you own or have permission to use.</span>
     ${canAct ? `<div class="acts" style="margin-top:8px"><label class="bt" style="display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer">Add your own<input type="file" id="f-media" accept="image/*,video/*" hidden></label><button class="bt" data-act="nomedia">Remove</button></div>
+    <label class="ck"><input type="checkbox" id="c-raw" ${it.raw_media ? "checked" : ""}>Post my photo or video exactly as it is, with no Tri News card</label>
     <span class="mut">Add media first, then edit the text: the page reloads after an upload.</span>` : ""}
   </div>`;
 
@@ -212,7 +211,7 @@ async function showReview(id) {
     <div class="src"><span>${esc(it.source_name)}</span>${/^https?:/.test(it.source_url) ? `<a href="${esc(it.source_url)}" target="_blank" rel="noopener">Open source</a>` : ""}</div>
     <details><summary>Original text</summary><p class="orig">${esc((it.original_text || "").slice(0, 1500))}</p></details>
     ${it.deadline ? `<p class="mut">Deadline in the text: ${esc(new Date(it.deadline).toLocaleString())}</p>` : ""}
-    ${it.status === "approved" && it.auto_approved ? `<p class="mut">Auto-approved. It posts around ${esc(new Date(it.publish_after || it.approved_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))} unless you pull it back.</p>` : ""}
+    ${it.status === "approved" && it.publish_after && new Date(it.publish_after) > new Date() ? `<p class="mut">${it.auto_approved ? "Auto-approved. " : ""}It posts around ${esc(new Date(it.publish_after).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}. Pull it back if you changed your mind.</p>` : ""}
     ${it.note ? `<p class="err">${esc(it.note)}</p>` : ""}
     <label class="lb">Headline<input class="in hl" id="f-headline" value="${esc(it.headline)}"></label>
     <label class="lb">Rewritten text<textarea class="in" id="f-text" rows="5">${esc(it.rewritten_text)}</textarea></label>
@@ -221,14 +220,22 @@ async function showReview(id) {
     <label class="lb">Hashtags<input class="in" id="f-tags" value="${esc((it.hashtags || []).join(" "))}"></label>
     ${mediaBlock(it, canAct)}
     ${seg("fmt", "Format", FORMATS, cur.fmt)}
-    ${seg("claim", "Claim", CLAIMS, cur.claim)}
+    ${seg("claim", "Your tag, never shown on the post", CLAIMS, cur.claim)}
     ${channelsBlock(it.channels || [])}
     ${it.audio_idea ? `<p class="mut">Audio idea: ${esc(it.audio_idea)}. Meta does not let apps add Instagram's own music, so tick "Send to me to post with Instagram audio" and add it yourself.</p>` : ""}
     <p class="mut">Media idea: ${esc(it.media_suggestion)}</p>
     ${canAct ? `<div class="acts"><button class="bt no" data-act="reject">Reject</button><button class="bt" data-act="save">Save</button><button class="bt go" data-act="approve">Approve and queue</button></div>`
       : it.status === "approved" ? `<div class="acts"><button class="bt" data-act="pullback">Pull back to pending</button></div>`
       : it.status === "deleted" ? `<div class="acts"><button class="bt go" data-act="restore">Restore to pending</button></div>`
+      : it.status === "published" ? `<p class="mut">Instagram does not let any app edit or delete a post. Open it in Instagram, tap the three dots, then Edit (caption) or Delete. To fix the picture, make an editable copy here, post the new one, then delete the old one in Instagram.</p>
+        <div class="acts">${it.ig_permalink ? `<a class="bt" href="${esc(it.ig_permalink)}" target="_blank" rel="noopener" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Open on Instagram</a>` : ""}<button class="bt go" data-act="repost">Edit and repost</button></div>`
       : `<p class="mut">Status: ${esc(it.status)}</p>`}`;
+}
+
+async function undoAt() {
+  const { data } = await sb.from("settings").select("value").eq("key", "undo_minutes");
+  const n = parseInt(data && data[0] && data[0].value, 10) || 0;
+  return n > 0 ? new Date(Date.now() + n * 60000).toISOString() : null;
 }
 
 async function act(a, btn) {
@@ -240,6 +247,24 @@ async function act(a, btn) {
   if (a === "restore") {
     const { error } = await sb.from("items").update({ status: "pending", deleted_at: null, note: null, fetched_at: new Date().toISOString() }).eq("id", cur.id);
     return error ? alert(error.message) : showReview(cur.id);
+  }
+  if (a === "repost") {
+    if (!confirm("Make an editable copy? After the new post is live, delete the old one in Instagram.")) return;
+    const now = new Date().toISOString();
+    const copy = {
+      source_name: cur.source_name, source_url: `copy://${cur.id}-${Date.now()}`, original_title: cur.original_title, original_text: cur.original_text,
+      topic: cur.topic, risk: cur.risk || "low", claim_status: cur.claim_status, priority_score: cur.priority_score || 90,
+      headline: cur.headline, rewritten_text: cur.rewritten_text, caption: cur.caption, hashtags: cur.hashtags || [], slides: cur.slides || [],
+      suggested_format: cur.suggested_format || "feed", channels: cur.channels || ["instagram"], media_suggestion: cur.media_suggestion,
+      media_url: cur.media_url, photo_url: cur.photo_url, photo_credit: cur.photo_credit, video_url: cur.video_url,
+      image_query: cur.image_query, audio_idea: cur.audio_idea, use_stock: cur.use_stock ?? true, raw_media: !!cur.raw_media,
+      status: "pending", edited_by_admin: true, fetched_at: now, source_published: now,
+      note: "Copy of an earlier post. Delete the old post on Instagram once this one is live.",
+    };
+    const { data, error } = await sb.from("items").insert(copy).select("id").single();
+    if (error) return alert(`Could not copy it: ${error.message}`);
+    location.hash = `item=${data.id}`;
+    return;
   }
   if (a === "pullback") {
     const { data, error } = await sb.from("items").update({ status: "pending", approved_at: null, publish_after: null, auto_approved: false }).eq("id", cur.id).eq("status", "approved").select();
@@ -257,15 +282,14 @@ async function act(a, btn) {
     suggested_format: cur.fmt,
     claim_status: cur.claim,
     channels: readChannels(),
+    raw_media: !!($("#c-raw") && $("#c-raw").checked),
   };
   u.edited_by_admin = cur.edited_by_admin || ["headline", "rewritten_text", "caption"].some(k => u[k] !== (cur[k] || ""));
   if (a === "approve") {
     if (!u.headline || !u.rewritten_text) return alert("Add a headline and text before approving.");
     if (!u.channels.length) return alert("Choose where to post it.");
-    if (u.claim_status !== "confirmed" && !LABEL_RX.test(`${u.rewritten_text} ${u.caption}`))
-      return alert("This is not marked Confirmed, but the text does not say so. Start it with “Unconfirmed:” or “Speculation:”.");
     if (!confirm("Approve and queue for posting?")) return;
-    Object.assign(u, { status: "approved", approved_at: new Date().toISOString(), publish_after: null, auto_approved: false, note: null });
+    Object.assign(u, { status: "approved", approved_at: new Date().toISOString(), publish_after: await undoAt(), auto_approved: false, note: null });
   } else if (a === "reject") {
     if (!confirm("Reject this item?")) return;
     u.status = "rejected";
@@ -293,10 +317,11 @@ function showNew() {
     <label class="lb">Carousel slides, one per line<textarea class="in" id="n-slides" rows="3"></textarea></label>
     <label class="lb">Hashtags<input class="in" id="n-tags" value="#TriNews"></label>
     <label class="lb">Your photo or video<input class="in" id="n-file" type="file" accept="image/*,video/*"></label>
+    <label class="ck"><input type="checkbox" id="n-raw">Post my photo or video exactly as it is, with no Tri News card</label>
     <label class="lb">Or a free stock photo search (optional)<input class="in" id="n-query" placeholder="stage lights"></label>
     <label class="lb">Audio idea for yourself (optional)<input class="in" id="n-audio" placeholder="upbeat gengetone beat"></label>
     ${seg("fmt", "Format", FORMATS, "feed")}
-    ${seg("claim", "Claim", CLAIMS, "confirmed")}
+    ${seg("claim", "Your tag, never shown on the post", CLAIMS, "confirmed")}
     ${channelsBlock(["instagram", "whatsapp"])}
     <p class="mut">Only add media you own or have permission to use.</p>
     <div class="acts"><button class="bt" data-act="n-draft">Save draft</button><button class="bt go" data-act="n-approve">Approve and queue</button></div>`;
@@ -310,6 +335,12 @@ function previewCard() {
   const h = $("#n-headline").value.trim() || "Your headline goes here";
   const b = $("#n-text").value.trim();
   const m = cur.preview;
+  if (m && $("#n-raw") && $("#n-raw").checked) {
+    box.innerHTML = `<div style="border-radius:16px;overflow:hidden;background:#000;max-height:540px;margin:0 auto 8px;display:flex;justify-content:center">
+      ${m.isVideo ? `<video src="${esc(m.url)}" muted autoplay loop playsinline style="max-width:100%;max-height:540px"></video>` : `<img src="${esc(m.url)}" alt="" style="max-width:100%;max-height:540px">`}</div>
+      <p class="mut">Your ${m.isVideo ? "video" : "picture"} will post as it is, with no card on it.</p>`;
+    return;
+  }
   const media = m ? (m.isVideo
     ? `<video src="${esc(m.url)}" muted autoplay loop playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`
     : `<img src="${esc(m.url)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`) : "";
@@ -320,7 +351,6 @@ function previewCard() {
       <div style="position:absolute;inset:0;padding:18px 20px;display:flex;flex-direction:column">
         <div style="display:flex;align-items:center;gap:8px;font-weight:800">${mark(30, "--b:#fff;--l:#0A2A1F")}${esc(BRAND)}</div>
         <div style="margin-top:auto">
-          ${cur.claim !== "confirmed" ? `<span class="cl cl-${cur.claim}" style="display:inline-block;margin-bottom:8px">${esc(LABEL[cur.claim])}</span>` : ""}
           <div style="font:700 ${tall ? 26 : 24}px/1.15 Newsreader,Georgia,serif">${esc(h)}</div>
           ${b ? `<div style="font-size:13px;line-height:1.4;margin-top:8px;color:#E5ECE8">${esc(b.slice(0, tall ? 160 : 200))}</div>` : ""}
           <div style="display:flex;justify-content:space-between;margin-top:14px;font-size:11px;color:#C9D6CF"><span>${esc(HANDLE)}</span><span>A TriBridge Services company</span></div>
@@ -337,8 +367,6 @@ async function saveNew(approve) {
   const caption = v("n-caption") || text || headline;
   const channels = readChannels();
   if (!channels.length) return alert("Choose where to post it.");
-  if (approve && cur.claim !== "confirmed" && !LABEL_RX.test(`${headline} ${text} ${caption}`))
-    return alert("This is not marked Confirmed, but the text does not say so. Start it with “Unconfirmed:” or “Speculation:”.");
   if (approve && !confirm("Approve and queue for posting?")) return;
   const now = new Date().toISOString();
   const rowData = {
@@ -347,9 +375,10 @@ async function saveNew(approve) {
     claim_status: cur.claim, risk: "low", priority_score: 95,
     headline, rewritten_text: text, caption, hashtags: tags(v("n-tags")), slides: lines(v("n-slides")),
     suggested_format: cur.fmt, channels, image_query: v("n-query") || null, audio_idea: v("n-audio") || null,
-    use_stock: true, edited_by_admin: true, status: approve ? "approved" : "pending",
+    use_stock: true, raw_media: $("#n-raw").checked, edited_by_admin: true, status: approve ? "approved" : "pending",
     approved_at: approve ? now : null, fetched_at: now, source_published: now,
   };
+  if (approve) rowData.publish_after = await undoAt();
   const file = $("#n-file").files[0];
   try {
     if (file) {
@@ -380,6 +409,7 @@ async function showSettings() {
     <label class="lb">Minimum source trust, 1 to 5<input class="in" id="s-trust" inputmode="numeric" value="${g("auto_min_trust", 3)}"></label>
     <label class="lb">Most auto-posts per day<input class="in" id="s-cap" inputmode="numeric" value="${g("auto_daily_cap", 6)}"></label>
     <label class="lb">Minutes to wait before posting<input class="in" id="s-delay" inputmode="numeric" value="${g("auto_delay_min", 10)}"></label>
+    <label class="lb">Undo window after you approve, in minutes (0 posts straight away)<input class="in" id="s-undo" inputmode="numeric" value="${g("undo_minutes", 0)}"></label>
     <label class="lb">Days to keep deleted items in the Bin<input class="in" id="s-bin" inputmode="numeric" value="${g("bin_days", 34)}"></label>
     <div class="acts"><button class="bt go" data-act="save-settings">Save settings</button></div>`;
 }
@@ -393,6 +423,7 @@ async function saveSettings() {
     { key: "auto_daily_cap", value: num("s-cap", 0, 50, 6) },
     { key: "auto_delay_min", value: num("s-delay", 1, 120, 10) },
     { key: "bin_days", value: num("s-bin", 1, 365, 34) },
+    { key: "undo_minutes", value: num("s-undo", 0, 60, 0) },
   ];
   const { error } = await sb.from("settings").upsert(rowsData, { onConflict: "key" });
   if (error) return alert(`Could not save: ${error.message}`);

@@ -2,7 +2,7 @@ import io
 import os
 import subprocess
 import tempfile
-from PIL import Image, ImageColor, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps
 from config import BRAND, HANDLE, PARENT, BG, ACCENT
 
 SIZES = {"feed": (1080, 1350), "story": (1080, 1920)}
@@ -60,7 +60,7 @@ def render_card(headline, body, status, kind="feed", step="", photo=None, overla
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0) if overlay else bg + (255,))
     if photo:
         try:
-            img.alpha_composite(ImageOps.fit(Image.open(io.BytesIO(photo)).convert("RGBA"), (W, H), Image.LANCZOS))
+            img.alpha_composite(ImageOps.fit(ImageOps.exif_transpose(Image.open(io.BytesIO(photo))).convert("RGBA"), (W, H), Image.LANCZOS))
         except Exception as ex:
             print(f"[render] photo ignored: {ex}")
             photo = None
@@ -87,7 +87,7 @@ def render_card(headline, body, status, kind="feed", step="", photo=None, overla
         sf = _font(FONT_BOLD, 34)
         d.text((W - pad - d.textlength(step, font=sf), 82), step, font=sf, fill="#E5ECE8")
 
-    badge = BADGE.get(status)
+    badge = None   # the claim tag is private to you: it is never printed on a post
     size, lines = 96, []
     for size in (96, 84, 72, 62, 54):
         hf = _font(FONT_HEAD, size)
@@ -134,7 +134,7 @@ def render_card(headline, body, status, kind="feed", step="", photo=None, overla
     if overlay:
         img.save(buf, "PNG")
     else:
-        img.convert("RGB").save(buf, "JPEG", quality=90)
+        img.convert("RGB").save(buf, "JPEG", quality=95, subsampling=0, optimize=True)
     return buf.getvalue()
 
 
@@ -146,8 +146,8 @@ def make_reel(jpg, seconds=8):
             fh.write(jpg)
         subprocess.run(
             ["ffmpeg", "-y", "-loop", "1", "-i", src, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-             "-t", str(seconds), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
-             "-vf", "scale=1080:1920", "-c:a", "aac", "-shortest", out],
+             "-t", str(seconds), "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-r", "30", "-movflags", "+faststart",
+             "-vf", "scale=1080:1920", "-c:a", "aac", "-b:a", "128k", "-shortest", out],
             check=True, capture_output=True)
         with open(out, "rb") as fh:
             return fh.read()
@@ -172,8 +172,46 @@ def make_video(clip, overlay_png, seconds=10, loop=True):
                 "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[bg];"
                 "[bg][1:v]overlay=0:0:format=auto[v]",
                 "-map", "[v]", "-map", "0:a:0" if has_audio else "2:a:0",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-shortest", out]
+                "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-r", "30", "-movflags", "+faststart", "-c:a", "aac", "-b:a", "128k", "-shortest", out]
         subprocess.run(cmd, check=True, capture_output=True)
+        with open(out, "rb") as fh:
+            return fh.read()
+
+
+def raw_image(photo, kind="feed"):
+    """Your picture exactly as it is: upright, never stretched, never cropped. Only when Instagram would refuse its
+    shape is it centred on a soft blurred copy of itself."""
+    im = ImageOps.exif_transpose(Image.open(io.BytesIO(photo))).convert("RGB")
+    w, h = im.size
+    ratio = w / h
+    if kind == "story":
+        ok, size = abs(ratio - 9 / 16) < 0.02, (1080, 1920)
+    else:
+        ok, size = 0.8 <= ratio <= 1.91, ((1080, 1350) if ratio < 0.8 else (1080, 566))
+    if ok:
+        out = im if w <= 1440 else im.resize((1440, round(h * 1440 / w)), Image.LANCZOS)
+    else:
+        cw, ch = size
+        out = ImageOps.fit(im, (cw, ch), Image.LANCZOS).filter(ImageFilter.GaussianBlur(40))
+        scale = min(cw / w, ch / h)
+        fg = im.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+        out.paste(fg, ((cw - fg.width) // 2, (ch - fg.height) // 2))
+    buf = io.BytesIO()
+    out.save(buf, "JPEG", quality=95, subsampling=0, optimize=True)
+    return buf.getvalue()
+
+
+def make_video_raw(clip):
+    """Your video as it is: same shape, never cropped, only converted to the H.264 MP4 Instagram accepts."""
+    with tempfile.TemporaryDirectory() as d:
+        src, out = os.path.join(d, "in.mp4"), os.path.join(d, "out.mp4")
+        with open(src, "wb") as fh:
+            fh.write(clip)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", src, "-t", "90", "-vf", "scale='min(1080,iw)':-2", "-c:v", "libx264", "-crf", "18",
+             "-preset", "medium", "-pix_fmt", "yuv420p", "-r", "30", "-movflags", "+faststart",
+             "-c:a", "aac", "-b:a", "128k", out],
+            check=True, capture_output=True)
         with open(out, "rb") as fh:
             return fh.read()
 

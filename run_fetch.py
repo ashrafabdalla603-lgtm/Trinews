@@ -3,15 +3,16 @@ import time
 import difflib
 import datetime as dt
 from supabase import create_client
-from sources import seed_sources, fetch_source
+from sources import seed_sources, fetch_source, confirm_tips
 from scorer import score
 from rewriter import rewrite
 from render_image import render_card, upload_media
-from media import stock_photo, stock_video, download
+from media import stock_photo, stock_video, stock_enabled, download
 from notifier import notify
 
 MIN_SCORE = int(os.getenv("MIN_SCORE") or 40)
 MAX_AI = int(os.getenv("MAX_AI_PER_RUN") or 10)
+TIP_BUDGET = int(os.getenv("MAX_TIPS_PER_RUN") or 15)   # your own tips are drafted first and never wait behind other news
 PENDING_CAP = int(os.getenv("PENDING_CAP") or 25)   # stop drafting when this many items wait for review
 NOTIFY_MIN = int(os.getenv("NOTIFY_MIN") or 70)
 MAX_AGE = int(os.getenv("MAX_AGE_HOURS") or 24)   # older stories are ignored
@@ -88,6 +89,8 @@ def main():
         print(f"[bin] {ex} (did you run the 005 SQL?)")
     auto_used = auto_count(sb, now) if cfg["auto_publish"] == "on" else 0
     auto_ids = set()
+    handled, failed_tips = set(), set()
+    stock_tried = stock_found = 0
 
     cands, ok_sources = [], 0
     for s in srcs:
@@ -97,7 +100,7 @@ def main():
                 raise RuntimeError("no stories found, check the feed address")
             ok_sources += 1
             for e in entries:
-                if e["published"] and now - e["published"] > dt.timedelta(hours=MAX_AGE):
+                if e["published"] and not e.get("force") and now - e["published"] > dt.timedelta(hours=MAX_AGE):
                     continue
                 cands.append({**e, "source": s})
         except Exception as ex:
@@ -117,12 +120,15 @@ def main():
     scored, fresh = [], 0
     for c in cands:
         if c["url"] in known:
+            if c.get("tip_id"):
+                handled.add(c["tip_id"])      # this tip was already drafted
             continue
         known.add(c["url"])
         title = c["title"].lower()
-        if any(difflib.SequenceMatcher(None, title, r.lower()).ratio() > 0.85 for r in recent):
-            continue
-        recent.append(c["title"])
+        if not c.get("force") and any(difflib.SequenceMatcher(None, title, r.lower()).ratio() > 0.85 for r in recent):
+            continue                          # your own tips are never treated as duplicates by title
+        if not c.get("force"):
+            recent.append(c["title"])
         fresh += 1
         sc, topic, hint = score(f"{c['title']} {c['text'][:600]}", c["source"]["trust_level"], c["published"])
         if c.get("force"):                    # a tip you sent yourself always gets drafted, near the top
@@ -137,7 +143,8 @@ def main():
         note_once(sb, now, "last_full_notice", 6,
                   f"⏸ Drafting is paused: {pending} items are waiting for review. Approve or reject some and it carries on.", ADMIN_URL)
     new, ai_failed, skipped = [], 0, 0
-    for sc, topic, hint, c in scored[:budget]:
+    batch = [x for x in scored if x[3].get("force")][:TIP_BUDGET] + [x for x in scored if not x[3].get("force")][:budget]
+    for sc, topic, hint, c in batch:
         if ai_failed >= 3 and not new:
             problems.append("Stopped early: the AI keeps failing")
             break
@@ -149,8 +156,8 @@ def main():
             print(f"[rewrite] {c['url']}: {ex}")
             if len(problems) < 8:
                 problems.append(f"AI: {str(ex)[:140]}")
-            if c.get("force"):
-                notify(f"⚠️ I could not draft your tip ({str(ex)[:120]}). Send it again in a while.")
+            if c.get("tip_id"):
+                failed_tips.add(c["tip_id"])  # stays in line and is retried, up to three times
             continue
         row = {"source_id": s["id"], "source_name": s["name"], "source_url": c["url"],
                "original_title": c["title"], "original_text": ((r["transcript"] if c.get("image") else "") or c["text"])[:6000], "topic": r["topic"]}
@@ -168,7 +175,11 @@ def main():
             print(f"[insert] {c['url']}: {ex}")
             if len(problems) < 8:
                 problems.append(f"Saving to Supabase: {str(ex)[:120]}")
+            if c.get("tip_id"):
+                failed_tips.add(c["tip_id"])
             continue
+        if c.get("tip_id"):
+            handled.add(c["tip_id"])
         if r["skip"]:
             skipped += 1
             continue
@@ -180,14 +191,17 @@ def main():
         try:    # a photo or clip for the post: your own (sent with a tip) or a free stock one from Pexels
             if extra["photo_url"]:
                 photo = download(extra["photo_url"])
-            elif not extra["video_url"] and r["image_query"] and os.getenv("PEXELS_API_KEY"):
+            elif not extra["video_url"] and r["image_query"] and stock_enabled():
                 credit = ""
+                stock_tried += 1
                 if row["suggested_format"] == "reel":
                     found = stock_video(r["image_query"])
                     if found:
                         extra["video_url"], photo, credit = found[0], found[1], found[2]
                 else:
                     photo, credit = stock_photo(r["image_query"])
+                if photo or extra.get("video_url"):
+                    stock_found += 1
                 if photo:
                     extra["photo_url"] = upload_media(sb, photo, f"{row['id']}-stock-{int(time.time())}.jpg")
                 if credit:
@@ -219,6 +233,11 @@ def main():
                 print(f"[auto] could not auto-approve: {ex}")
         new.append(row)
 
+    try:
+        confirm_tips(sb, handled, failed_tips)
+    except Exception as ex:
+        print(f"[tips] could not confirm: {ex}")
+
     hot = [r for r in new if r["priority_score"] >= NOTIFY_MIN and r["id"] not in auto_ids]
     for r in hot:
         link = f"{ADMIN_URL}#item={r['id']}" if ADMIN_URL else ""
@@ -231,7 +250,10 @@ def main():
     summary = (f"Fetch report\nSources: {ok_sources} ok, {len(srcs) - ok_sources} failed\n"
                f"Stories seen: {len(cands)}, new: {fresh}, matched topics: {len(scored)}\n"
                f"Drafts saved: {len(new)}, skipped by the AI: {skipped}, AI errors: {ai_failed}\n"
+               f"Stock photos or clips: {stock_found} of {stock_tried}" + ("" if stock_enabled() else " (off: add a PEXELS_API_KEY or PIXABAY_API_KEY secret)") + "\n"
                f"Waiting for review: {pending + len(new)}")
+    if stock_tried and not stock_found:
+        problems.append("Stock images: none found. Check the PEXELS_API_KEY or PIXABAY_API_KEY secret.")
     if problems:
         summary += "\nProblems:\n- " + "\n- ".join(problems[:8])
     print(summary)

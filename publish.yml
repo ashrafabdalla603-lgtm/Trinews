@@ -1,7 +1,7 @@
 name: publish
 on:
   schedule:
-    - cron: "4-59/15 * * * *"   # picks up approved items; does nothing when none are approved
+    - cron: "3-58/5 * * * *"   # safety net: approving in the app also starts this job straight away
   workflow_dispatch:
 concurrency: publish
 jobs:
@@ -28,6 +28,8 @@ jobs:
           GRAPH_HOST: ${{ vars.GRAPH_HOST }}
           GRAPH_VERSION: ${{ vars.GRAPH_VERSION }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          MAX_POSTS_PER_RUN: ${{ vars.MAX_POSTS_PER_RUN }}
           BRAND_NAME: ${{ vars.BRAND_NAME }}
           BRAND_HANDLE: ${{ vars.BRAND_HANDLE }}
           BRAND_TAG: ${{ vars.BRAND_TAG }}

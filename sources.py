@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 import datetime as dt
 import feedparser
 import requests
+from notifier import notify
 from bs4 import BeautifulSoup
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; NewsdeskBot/1.0)"}
@@ -103,10 +104,13 @@ def _store(sb, data, name, ctype):
     return bucket.get_public_url(name)
 
 
+_TIPS = {"source": None, "ids": [], "last": 0}   # what the last fetch_tips call returned, confirmed after drafting
+
+
 def fetch_tips(s, sb):
-    """Messages you send to your Tri News Alerts bot become story tips. Send text, or just a screenshot of a gossip
-    story: the AI reads it and credits the page. A photo or video is only posted when the caption says 'use photo'
-    or 'use video', so someone else's screenshot is never republished. Only attach media you own or may use."""
+    """Messages you send to your Tri News Alerts bot become story tips. Send text, or just screenshots of gossip
+    stories (up to 10 at a time, as photos or files): the AI reads each one and credits the page. A photo or video is
+    only posted when the caption says 'use photo' or 'use video', so someone else's screenshot is never republished."""
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN"), str(os.getenv("TELEGRAM_CHAT_ID") or "")
     if not (tok and chat):
         return []
@@ -114,40 +118,66 @@ def fetch_tips(s, sb):
     r = requests.get(f"https://api.telegram.org/bot{tok}/getUpdates",
                      params={"offset": offset, "timeout": 0}, timeout=20)
     r.raise_for_status()
-    out, last = [], offset - 1
+    out, ids, last = [], [], offset - 1
     use_rx = re.compile(r"\buse (this |my |the )?(photo|pic|picture|image|video|clip|it)\b", re.I)
     for u in r.json().get("result", []):
         last = max(last, u["update_id"])
         m = u.get("message") or {}
         raw = (m.get("text") or m.get("caption") or "").strip()
-        photo, video = m.get("photo"), m.get("video")
+        photo, video, doc = m.get("photo"), m.get("video"), m.get("document") or {}
+        image_id = photo[-1]["file_id"] if photo else (doc.get("file_id") if str(doc.get("mime_type", "")).startswith("image/") else None)
         if str((m.get("chat") or {}).get("id")) != chat or raw.startswith("/"):
             continue                          # only you
         use = bool(use_rx.search(raw))
         text = use_rx.sub("", raw).strip()
-        if len(text) < 25 and not photo:
+        if len(text) < 25 and not image_id:
             continue                          # real text, or a screenshot
         link = re.search(r"https?://\S+", text)
-        entry = {"title": text.split("\n")[0][:140] if text else "Screenshot tip",
+        entry = {"title": text.split("\n")[0][:140] if text else f"Screenshot tip {u['update_id']}",
                  "url": link.group(0) if link else f"tip://{u['update_id']}",
                  "text": text,
                  "published": dt.datetime.fromtimestamp(m.get("date", 0), dt.timezone.utc),
-                 "force": True}
+                 "force": True, "tip_id": u["update_id"]}
         try:
-            if photo:
-                data, ext = _tg_file(tok, photo[-1]["file_id"])
+            if image_id:
+                data, ext = _tg_file(tok, image_id)
                 entry["image"] = data         # read by the AI
                 if use:
-                    entry["photo_url"] = _store(sb, data, f"tip-{u['update_id']}.{ext}", "image/jpeg")
+                    entry["photo_url"] = _store(sb, data, f"tip-{u['update_id']}.{ext}", "image/png" if ext == "png" else "image/jpeg")
             elif video and use and (video.get("file_size") or 0) < 19_000_000:
                 data, ext = _tg_file(tok, video["file_id"])
                 entry["video_url"] = _store(sb, data, f"tip-{u['update_id']}.{ext}", "video/mp4")
         except Exception as ex:
             print(f"[tips] attachment skipped: {ex}")
+        ids.append(u["update_id"])
         out.append(entry)
-    if last >= offset:
-        sb.table("sources").update({"state": {"offset": last + 1}}).eq("id", s["id"]).execute()
+    _TIPS.update(source=s, ids=ids, last=last)
     return out
+
+
+def confirm_tips(sb, handled, failed):
+    """Tells Telegram which tips are finished. A tip that failed stays in line and is tried again, up to three times.
+    A tip that has not had its turn yet simply waits, so a busy AI or an empty quota never loses one."""
+    s = _TIPS["source"]
+    if not s:
+        return
+    state = dict(s.get("state") or {})
+    tries = {str(k): v for k, v in (state.get("tries") or {}).items()}
+    keep = []
+    for uid in _TIPS["ids"]:
+        if uid in handled:
+            tries.pop(str(uid), None)
+        elif uid in failed:
+            tries[str(uid)] = tries.get(str(uid), 0) + 1
+            if tries[str(uid)] >= 3:
+                tries.pop(str(uid), None)
+                notify("⚠️ I gave up on one of your tips after three tries. Please send it again.")
+            else:
+                keep.append(uid)
+        else:
+            keep.append(uid)
+    sb.table("sources").update({"state": {**state, "offset": min(keep) if keep else _TIPS["last"] + 1, "tries": tries}}).eq("id", s["id"]).execute()
+    _TIPS["source"] = None
 
 
 def fetch_trends(s):

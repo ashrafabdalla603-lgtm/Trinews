@@ -45,3 +45,9 @@ def publish(kind, caption, image_urls, video_url=None):
         c = _post(f"{IG}/media", image_url=image_urls[0], caption=caption)
     _wait(c["id"])
     return _post(f"{IG}/media_publish", creation_id=c["id"])["id"]
+
+
+def permalink(media_id):
+    """The public link of a published post, so you can open it in Instagram to edit or delete it."""
+    r = requests.get(f"{G}/{media_id}", params={"fields": "permalink", "access_token": TOKEN}, timeout=30)
+    return r.json().get("permalink") if r.ok else None
